@@ -6,7 +6,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sync"
+
+	"github.com/joho/godotenv"
 )
 
 type StockData struct {
@@ -53,11 +56,21 @@ func main() {
 }
 
 func fetchStockData(c chan StockData, stock string, wg *sync.WaitGroup) {
+	
 	defer wg.Done()
 
-	resp, err := http.Get("https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=" + stock + "&interval=5min&apikey=YOUR_API_KEY")
+	// load .env file
+	err := godotenv.Load()
+    if err != nil {
+        log.Fatal("Error loading .env file")
+    }
+
+	key := os.Getenv("API_KEY")
+	fmt.Println(key)
+
+	resp, err := http.Get("https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=" + stock + "&interval=5min&apikey=" + key)
 	if err != nil {
-		log.Println(err) // Change to non-fatal error logging
+		log.Println(err) 
 		return
 	}
 	defer resp.Body.Close()
