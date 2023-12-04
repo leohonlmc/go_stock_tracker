@@ -8,10 +8,14 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/joho/godotenv"
+
+	"github.com/gin-gonic/gin"
 )
 
+// struct for stock data
 type StockData struct {
 	MetaData   MetaData              `json:"Meta Data"`
 	TimeSeries map[string]StockEntry `json:"Time Series (5min)"`
@@ -34,29 +38,64 @@ type StockEntry struct {
 	Volume string `json:"5. volume"`
 }
 
+// main function
 func main() {
-	stocks := []string{"IBM", "PLTR"}
-	c := make(chan StockData)
 
-	var wg sync.WaitGroup
+	r := gin.Default()
 
-	for _, stock := range stocks {
-		wg.Add(1)
-		go fetchStockData(c, stock, &wg)
-	}
+    stocks := []string{"IBM", "PLTR"}
+    c := make(chan StockData)
 
-	go func() {
-		wg.Wait()
-		close(c)
-	}()
+	// GET /stocks
+	r.GET("/startFetching", func(ctx *gin.Context) {
+		// Fetch data for each stock when the program starts
+		var wg sync.WaitGroup
+		for _, stock := range stocks {
+			wg.Add(1)
+			go fetchStockData(c, stock, &wg)
+		}
+	
+		// Time interval for fetching data each 5 minutes
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+	
+		go func() {
+			for {
+				select {
+				case <-ticker.C:
+					var wg sync.WaitGroup
+					for _, stock := range stocks {
+						wg.Add(1)
+						go fetchStockData(c, stock, &wg)
+					}
+					wg.Wait() // Wait for all goroutines to finish for this ticker cycle
+				}
+			}
+		}()
+	
+		ctx.JSON(200, gin.H{
+			"message": "Stock data fetching started",
+		})
+	})
 
-	for data := range c {
-		fmt.Println(data) 
-	}
+    // Continuously process data from the channel
+    go func() {
+        for data := range c {
+            fmt.Println(data) 
+        }
+    }()
+
+    // start http server
+    log.Println("HTTP server started on :8080")
+    err := http.ListenAndServe(":8080", nil)
+    if err != nil {
+        log.Fatal("ListenAndServe: ", err)
+    }
 }
 
 func fetchStockData(c chan StockData, stock string, wg *sync.WaitGroup) {
 	
+	// The counter is decremented by calling wg.Done()
 	defer wg.Done()
 
 	// load .env file
@@ -66,7 +105,6 @@ func fetchStockData(c chan StockData, stock string, wg *sync.WaitGroup) {
     }
 
 	key := os.Getenv("API_KEY")
-	fmt.Println(key)
 
 	resp, err := http.Get("https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=" + stock + "&interval=5min&apikey=" + key)
 	if err != nil {
