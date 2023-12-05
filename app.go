@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 // struct for stock data
@@ -38,60 +38,15 @@ type StockEntry struct {
 	Volume string `json:"5. volume"`
 }
 
-// main function
-func main() {
-
-	r := gin.Default()
-
-    stocks := []string{"IBM", "PLTR"}
-    c := make(chan StockData)
-
-	// GET /stocks
-	r.GET("/startFetching", func(ctx *gin.Context) {
-		// Fetch data for each stock when the program starts
-		var wg sync.WaitGroup
-		for _, stock := range stocks {
-			wg.Add(1)
-			go fetchStockData(c, stock, &wg)
-		}
-	
-		// Time interval for fetching data each 5 minutes
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-	
-		go func() {
-			for {
-				select {
-				case <-ticker.C:
-					var wg sync.WaitGroup
-					for _, stock := range stocks {
-						wg.Add(1)
-						go fetchStockData(c, stock, &wg)
-					}
-					wg.Wait() // Wait for all goroutines to finish for this ticker cycle
-				}
-			}
-		}()
-	
-		ctx.JSON(200, gin.H{
-			"message": "Stock data fetching started",
-		})
-	})
-
-    // Continuously process data from the channel
-    go func() {
-        for data := range c {
-            fmt.Println(data) 
-        }
-    }()
-
-    // start http server
-    log.Println("HTTP server started on :8080")
-    err := http.ListenAndServe(":8080", nil)
-    if err != nil {
-        log.Fatal("ListenAndServe: ", err)
-    }
+var upgrader = websocket.Upgrader{
+    ReadBufferSize:  1024,
+    WriteBufferSize: 1024,
+    CheckOrigin: func(r *http.Request) bool {
+        return true // Adjust the origin policy as needed
+    },
 }
+
+var latestStockData []StockData // Global variable to store the latest stock data
 
 func fetchStockData(c chan StockData, stock string, wg *sync.WaitGroup) {
 	
@@ -127,3 +82,83 @@ func fetchStockData(c chan StockData, stock string, wg *sync.WaitGroup) {
 
 	c <- data
 }
+
+func wshandler(w http.ResponseWriter, r *http.Request) {
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Println("Failed to upgrade to WebSocket:", err)
+        return
+    }
+    defer conn.Close()
+
+    for {
+        messageType, p, err := conn.ReadMessage()
+        if err != nil {
+            log.Println("Read error:", err)
+            break
+        }
+
+        log.Printf("Received: %s", p)
+
+        if err := conn.WriteMessage(messageType, p); err != nil {
+            log.Println("Write error:", err)
+            break
+        }
+    }
+}
+
+// main function
+func main() {
+	r := gin.Default()
+
+	r.GET("/ws", func(c *gin.Context) {
+        wshandler(c.Writer, c.Request)
+    })
+
+    stocks := []string{"IBM", "PLTR"}
+	c := make(chan StockData, len(stocks))
+
+	var wg sync.WaitGroup
+	for _, stock := range stocks {
+		wg.Add(1)
+		go fetchStockData(c, stock, &wg)
+	}
+	wg.Wait()
+
+	for i := 0; i < len(stocks); i++ {
+		latestStockData = append(latestStockData, <-c)
+	}
+
+	r.GET("/startFetching", func(ctx *gin.Context) {
+		ctx.JSON(200, gin.H{
+			"message": "Stock data fetching successfully started",
+			"data":    latestStockData,
+		})
+	})
+
+	ticker := time.NewTicker(5 * time.Minute)
+	go func() {
+		for range ticker.C {
+			var wg sync.WaitGroup
+			for _, stock := range stocks {
+				wg.Add(1)
+				go fetchStockData(c, stock, &wg)
+			}
+			wg.Wait()
+
+			tempData := make([]StockData, 0)
+			for i := 0; i < len(stocks); i++ {
+				tempData = append(tempData, <-c)
+			}
+			latestStockData = tempData
+		}
+	}()
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" 
+	}
+
+	r.Run(":" + port)
+}
+
