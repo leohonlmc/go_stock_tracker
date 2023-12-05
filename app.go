@@ -42,11 +42,11 @@ var upgrader = websocket.Upgrader{
     ReadBufferSize:  1024,
     WriteBufferSize: 1024,
     CheckOrigin: func(r *http.Request) bool {
-        return true // Adjust the origin policy as needed
+        return true 
     },
 }
 
-var latestStockData []StockData // Global variable to store the latest stock data
+var latestStockData []StockData
 
 func fetchStockData(c chan StockData, stock string, wg *sync.WaitGroup) {
 	
