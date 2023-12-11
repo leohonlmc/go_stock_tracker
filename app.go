@@ -42,6 +42,12 @@ type StockEntry struct {
 	Volume string `json:"5. volume"`
 }
 
+type WSMessage struct {
+    Action  string   `json:"action"`
+    Ticker  string   `json:"ticker,omitempty"`
+    Tickers []string `json:"stocks,omitempty"`
+}
+
 var upgrader = websocket.Upgrader{
     ReadBufferSize:  1024,
     WriteBufferSize: 1024,
@@ -49,8 +55,6 @@ var upgrader = websocket.Upgrader{
         return true 
     },
 }
-
-// var latestStockData []StockData
 
 func fetchStockData(c chan StockData, stock string, wg *sync.WaitGroup) {
 	
@@ -102,13 +106,11 @@ func processStockData( ticker string) (latestPrice, highestPrice, lowestPrice fl
 	stockData := <-c
 
     for timestamp, entry := range stockData.TimeSeries {
-        // Parse the timestamp
         timeParsed, err := time.Parse("2006-01-02 15:04:05", timestamp)
         if err != nil {
             return 0, 0, 0, err
         }
 
-        // Check if this is the latest timestamp
         if timeParsed.After(latestTime) {
             latestTime = timeParsed
             latestPrice, err = strconv.ParseFloat(entry.Close, 64)
@@ -117,7 +119,6 @@ func processStockData( ticker string) (latestPrice, highestPrice, lowestPrice fl
             }
         }
 
-        // Check for highest and lowest prices
         highPrice, err := strconv.ParseFloat(entry.High, 64)
         if err != nil {
             return 0, 0, 0, err
@@ -153,16 +154,18 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
             break
         }
 
-        var request map[string]string
-        if err := json.Unmarshal(msg, &request); err != nil {
+        var wsMsg WSMessage
+        if err := json.Unmarshal(msg, &wsMsg); err != nil {
             log.Println("Error decoding message:", err)
             continue
         }
 
-        if request["action"] == "getStock" {
-            stockTicker := request["ticker"]
+        switch wsMsg.Action {
+        case "getStock":
+            stockTicker := wsMsg.Ticker
             go func() {
-                ticker := time.NewTicker(50 * time.Millisecond) // Set your desired interval
+                // one minute ticker
+                ticker := time.NewTicker(1 * time.Minute)
                 defer ticker.Stop()
 
                 for range ticker.C {
@@ -190,6 +193,41 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
                     }
                 }
             }()
+
+        case "getStocks":
+            stocks := wsMsg.Tickers
+
+            var wg sync.WaitGroup
+            results := make(chan StockData, len(stocks))
+            
+            for _, ticker := range stocks {
+                wg.Add(1)
+                go fetchStockData(results, ticker, &wg)
+            }
+
+            wg.Wait()
+            close(results)
+
+            allStocksData := make([]StockData, 0, len(stocks))
+            for stockData := range results {
+                allStocksData = append(allStocksData, stockData)
+            }
+
+            response, err := json.Marshal(map[string]interface{}{
+                "action": "stocksData",
+                "data": allStocksData,
+            })
+
+            if err != nil {
+                log.Println("Error encoding response:", err)
+                continue
+            }
+            
+            // send response
+            if err := conn.WriteMessage(websocket.TextMessage, response); err != nil {
+                log.Println("Write error:", err)
+                break
+            }
         }
     }
 }
@@ -215,66 +253,4 @@ func main() {
 
 	r.Run(":" + port)
 }
-
-
-// stocks := []string{"IBM", "PLTR"}
-// 	c := make(chan StockData, len(stocks))
-
-// 	var wg sync.WaitGroup
-// 	for _, stock := range stocks {
-// 		wg.Add(1)
-// 		go fetchStockData(c, stock, &wg)
-// 	}
-// 	wg.Wait()
-
-// 	for i := 0; i < len(stocks); i++ {
-// 		latestStockData = append(latestStockData, <-c)
-// 	}
-
-// 	r.GET("/highLevelData", func(ctx *gin.Context) {
-// 		ticker := ctx.Query("ticker")
-// 		latestPrice, highestPrice, lowestPrice, err := processStockData(ticker)
-
-// 		if err != nil {
-// 			ctx.JSON(500, gin.H{
-// 				"message": "Error processing stock data",
-// 				"error":   err,
-// 			})
-// 			return
-// 		}
-
-// 		ctx.JSON(200, gin.H{
-// 			"latestPrice":  latestPrice,
-// 			"highestPrice": highestPrice,
-// 			"lowestPrice":  lowestPrice,
-// 			"ticker":       ticker,
-// 		})
-
-// 	})
-
-// 	r.GET("/startFetching", func(ctx *gin.Context) {
-// 		ctx.JSON(200, gin.H{
-// 			"message": "Stock data fetching successfully started",
-// 			"data":    latestStockData,
-// 		})
-// 	})
-
-// 	ticker := time.NewTicker(5 * time.Minute)
-// 	go func() {
-// 		for range ticker.C {
-// 			var wg sync.WaitGroup
-// 			for _, stock := range stocks {
-// 				wg.Add(1)
-// 				go fetchStockData(c, stock, &wg)
-// 			}
-// 			wg.Wait()
-
-// 			tempData := make([]StockData, 0)
-// 			for i := 0; i < len(stocks); i++ {
-// 				tempData = append(tempData, <-c)
-// 			}
-// 			latestStockData = tempData
-// 		}
-// 	}()
-
 
