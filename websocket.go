@@ -36,7 +36,7 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
             stockTicker := wsMsg.Ticker
             go func() {
                 // one minute ticker
-                ticker := time.NewTicker(1 * time.Minute)
+                ticker := time.NewTicker(2 * time.Second)
                 defer ticker.Stop()
 
                 for range ticker.C {
