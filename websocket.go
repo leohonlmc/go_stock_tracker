@@ -34,71 +34,71 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
         switch wsMsg.Action {
         case "getStock":
             stockTicker := wsMsg.Ticker
+
+            latestPrice, highestPrice, lowestPrice, err := processStockData(stockTicker)
+            if err != nil {
+                log.Println("Error processing stock data:", err)
+                continue
+            }
+
+            response, err := json.Marshal(map[string]interface{}{
+                "action":       "stockData",
+                "ticker":       stockTicker,
+                "latestPrice":  latestPrice,
+                "highestPrice": highestPrice,
+                "lowestPrice":  lowestPrice,
+            })
+            if err != nil {
+                log.Println("Error encoding response:", err)
+                continue
+            }
+
+            if err := conn.WriteMessage(websocket.TextMessage, response); err != nil {
+                log.Println("Write error:", err)
+                break
+            }
+
+        case "getStocks":
+            stocks := wsMsg.Tickers
+
             go func() {
-                // one minute ticker
-                ticker := time.NewTicker(2 * time.Second)
+                ticker := time.NewTicker(1 * time.Minute)
                 defer ticker.Stop()
-
+    
                 for range ticker.C {
-                    latestPrice, highestPrice, lowestPrice, err := processStockData(stockTicker)
-                    if err != nil {
-                        log.Println("Error processing stock data:", err)
-                        continue
+                    var wg sync.WaitGroup
+                    results := make(chan StockData, len(stocks))
+                    
+                    for _, ticker := range stocks {
+                        wg.Add(1)
+                        go fetchStockData(results, ticker, &wg)
                     }
-
+        
+                    wg.Wait()
+                    close(results)
+        
+                    allStocksData := make([]StockData, 0, len(stocks))
+                    for stockData := range results {
+                        allStocksData = append(allStocksData, stockData)
+                    }
+        
                     response, err := json.Marshal(map[string]interface{}{
-                        "action":       "stockData",
-                        "ticker":       stockTicker,
-                        "latestPrice":  latestPrice,
-                        "highestPrice": highestPrice,
-                        "lowestPrice":  lowestPrice,
+                        "action": "stocksData",
+                        "data": allStocksData,
                     })
+        
                     if err != nil {
                         log.Println("Error encoding response:", err)
                         continue
                     }
-
+                    
+                    // send response
                     if err := conn.WriteMessage(websocket.TextMessage, response); err != nil {
                         log.Println("Write error:", err)
                         break
                     }
                 }
             }()
-
-        case "getStocks":
-            stocks := wsMsg.Tickers
-
-            var wg sync.WaitGroup
-            results := make(chan StockData, len(stocks))
-            
-            for _, ticker := range stocks {
-                wg.Add(1)
-                go fetchStockData(results, ticker, &wg)
-            }
-
-            wg.Wait()
-            close(results)
-
-            allStocksData := make([]StockData, 0, len(stocks))
-            for stockData := range results {
-                allStocksData = append(allStocksData, stockData)
-            }
-
-            response, err := json.Marshal(map[string]interface{}{
-                "action": "stocksData",
-                "data": allStocksData,
-            })
-
-            if err != nil {
-                log.Println("Error encoding response:", err)
-                continue
-            }
-            
-            // send response
-            if err := conn.WriteMessage(websocket.TextMessage, response); err != nil {
-                log.Println("Write error:", err)
-                break
-            }
         }
     }
 }
